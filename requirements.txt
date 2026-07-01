@@ -1,0 +1,11 @@
+torch
+torchvision
+pandas
+numpy
+scikit-learn
+transformers>=4.37.0
+qwen-vl-utils
+bitsandbytes>=0.46.1
+pillow
+requests
+tqdmS
