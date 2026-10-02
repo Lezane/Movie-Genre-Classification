@@ -143,7 +143,8 @@ Output your response strictly as a JSON object with the following structure. Do 
     for c in [0.1, 0.3, 1, 3]:
         clf = OneVsRestClassifier(LogisticRegression(C=c, max_iter=3000, class_weight='balanced'))
         clf.fit(train_emb, train_lbl)
-        val_acc = accuracy_score(val_lbl, clf.predict(val_emb))
+        val_acc = f1_score(val_lbl, clf.predict(val_emb), average='micro', zero_division=0)
+        # val_acc = accuracy_score(val_lbl, clf.predict(val_emb)) ## If subset accuracy is the selection criteria
         if val_acc > best_acc:
             best_acc, best_c, best_lr = val_acc, c, clf
 
@@ -152,6 +153,7 @@ Output your response strictly as a JSON object with the following structure. Do 
         "Micro F1": f1_score(test_lbl, test_preds_lr, average='micro', zero_division=0),
         "Exact Match": accuracy_score(test_lbl, test_preds_lr)
     }
+    
 
     # 5. MLP Head
     print("\n[VLM] Tuning MLP...")
@@ -159,7 +161,8 @@ Output your response strictly as a JSON object with the following structure. Do 
     for hidden in [(128,), (256,), (128, 64)]:
         clf = MLPClassifier(hidden_layer_sizes=hidden, max_iter=500, random_state=seed)
         clf.fit(train_emb, train_lbl)
-        val_acc = accuracy_score(val_lbl, clf.predict(val_emb))
+        val_acc = f1_score(val_lbl, clf.predict(val_emb), average='micro', zero_division=0)
+        # val_acc = accuracy_score(val_lbl, clf.predict(val_emb))  ## If subset accuracy is the selection criteria
         if val_acc > best_acc:
             best_acc, best_hidden, best_mlp = val_acc, hidden, clf
 
