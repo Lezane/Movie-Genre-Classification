@@ -12,6 +12,10 @@ from sklearn.neural_network import MLPClassifier
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from qwen_vl_utils import process_vision_info
 
+from time import perf_counter
+from sklearn.preprocessing import StandardScaler
+from joblib import parallel_config
+
 def run_zero_shot(model, processor, df_subset, prompt, max_tokens=256, batch_size=32):
     predictions = []
     model.eval()
@@ -138,22 +142,84 @@ Output your response strictly as a JSON object with the following structure. Do 
     test_emb, test_lbl = extract_embeddings(model, processor, df_test, prompt_json)
 
     # 4. Logistic Regression Head
-    print("\n[VLM] Tuning Logistic Regression...")
-    best_c, best_acc, best_lr = 1.0, 0.0, None
-    for c in [0.1, 0.3, 1, 3]:
-        clf = OneVsRestClassifier(LogisticRegression(C=c, max_iter=3000, class_weight='balanced'))
-        clf.fit(train_emb, train_lbl)
-        val_acc = f1_score(val_lbl, clf.predict(val_emb), average='micro', zero_division=0)
-        # val_acc = accuracy_score(val_lbl, clf.predict(val_emb)) ## If subset accuracy is the selection criteria
-        if val_acc > best_acc:
-            best_acc, best_c, best_lr = val_acc, c, clf
+    print("\n[VLM] Tuning Logistic Regression...", flush=True)
 
-    test_preds_lr = best_lr.predict(test_emb)
-    results['VLM + LogReg'] = {
-        "Micro F1": f1_score(test_lbl, test_preds_lr, average='micro', zero_division=0),
-        "Exact Match": accuracy_score(test_lbl, test_preds_lr)
+    # Fit scaling on training data only.
+    # Keep the original embeddings unchanged for the MLP section.
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(train_emb)
+    X_val = scaler.transform(val_emb)
+    X_test = scaler.transform(test_emb)
+
+    print(
+        f"Training samples: {X_train.shape[0]}, "
+        f"features: {X_train.shape[1]}, "
+        f"genres: {train_lbl.shape[1]}",
+        flush=True,
+    )
+
+    best_c, best_acc, best_lr = None, -1.0, None
+
+    # Train two genre classifiers concurrently, with one CPU thread
+    # per worker to avoid competing thread pools.
+    with parallel_config(backend="loky", inner_max_num_threads=1):
+        for c in [0.1, 0.3, 1, 3]:
+            start = perf_counter()
+            print(f"Starting C={c}...", flush=True)
+
+            clf = OneVsRestClassifier(
+                LogisticRegression(
+                    C=c,
+                    solver="lbfgs",
+                    max_iter=300,
+                    tol=1e-3,
+                    class_weight="balanced",
+                ),
+                n_jobs=2,
+            )
+            clf.fit(X_train, train_lbl)
+
+            val_preds = clf.predict(X_val)
+            val_acc = f1_score(
+                val_lbl,
+                val_preds,
+                average="micro",
+                zero_division=0,
+            )
+
+            iterations = [
+                int(est.n_iter_.max())
+                for est in clf.estimators_
+                if hasattr(est, "n_iter_")
+            ]
+            max_iterations = max(iterations, default=0)
+
+            print(
+                f"C={c} | "
+                f"Time: {perf_counter() - start:.1f}s | "
+                f"Validation micro-F1: {val_acc:.4f} | "
+                f"Max iterations: {max_iterations}",
+                flush=True,
+            )
+
+            if val_acc > best_acc:
+                best_acc, best_c, best_lr = val_acc, c, clf
+
+    print(
+        f"Best C={best_c} | Validation micro-F1={best_acc:.4f}",
+        flush=True,
+    )
+
+    test_preds_lr = best_lr.predict(X_test)
+    results["VLM + LogReg"] = {
+        "Micro F1": f1_score(
+            test_lbl,
+            test_preds_lr,
+            average="micro",
+            zero_division=0,
+        ),
+        "Exact Match": accuracy_score(test_lbl, test_preds_lr),
     }
-    
 
     # 5. MLP Head
     print("\n[VLM] Tuning MLP...")
