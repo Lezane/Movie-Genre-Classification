@@ -9,3 +9,4 @@ bitsandbytes>=0.46.1
 pillow
 requests
 tqdmS
+joblib>=1.3
